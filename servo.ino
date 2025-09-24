@@ -1,44 +1,94 @@
-#include <Servo.h>  // เรียกใช้ไลบรารี Servo สำหรับควบคุมมอเตอร์
+/****************************************************
+ * ESP8266 + Blynk IoT + Servo + Water Sensor
+ * Sensor priority: มีน้ำ → หุบทันที
+ * Manual priority: ไม่มีน้ำ → ปุ่มกดปุ๊บ Servo ทำปั๊บ
+ ****************************************************/
 
-Servo myServo;      // สร้างวัตถุ Servo ชื่อ myServo
+#define BLYNK_TEMPLATE_ID "TMPL6RLdUYDMd"   
+#define BLYNK_TEMPLATE_NAME "Quickstart Template" 
+#define BLYNK_AUTH_TOKEN "jlSfwbE3VgfJBP1oVqZhAiS0oYaew9oe" 
 
-const int waterPin = A0;     // กำหนดขา Analog ของ Water Sensor เป็น A0
-const int servoPin = D5;     // กำหนดขา Signal ของ Servo เป็น D5
-const int threshold = 50;    // กำหนดค่าต่ำสุดสำหรับจับน้ำหยดเดียว (ปรับได้ตามจริง)
+#define WIFI_SSID "vivo Y3s"       
+#define WIFI_PASSWORD "05022567"   
 
+#include <ESP8266WiFi.h>         
+#include <BlynkSimpleEsp8266.h>  
+#include <Servo.h>               
+
+Servo myServo; 
+
+// -------------------- ขา --------------------
+const int waterPin = A0;     
+const int servoPin = D5;     
+
+const int SERVO_OPEN_ANGLE  = 0;   // กางราว
+const int SERVO_CLOSE_ANGLE = 85;  // หุบราว
+const int WATER_THRESHOLD   = 60;  // ค่า sensor ตัดสินน้ำ
+
+int servoState = SERVO_OPEN_ANGLE;  
+int waterValue = 0;                 // ค่าจาก sensor
+
+BlynkTimer timer;          
+
+// -------------------- ตรวจน้ำทุก 0.5s --------------------
+void checkWaterSensor() {
+  waterValue = analogRead(waterPin);
+  Serial.print("Water sensor value: ");
+  Serial.println(waterValue);
+
+  // มีน้ำ → Sensor ชนะเสมอ
+  if (waterValue > WATER_THRESHOLD && servoState != SERVO_CLOSE_ANGLE) {
+    myServo.write(SERVO_CLOSE_ANGLE);
+    servoState = SERVO_CLOSE_ANGLE;
+    Blynk.virtualWrite(V0, 1); // sync ปุ่ม → หุบ
+    Serial.println("Sensor: พบฝน → Servo หุบ");
+  }
+}
+
+// -------------------- ปุ่ม Manual (V0) --------------------
+BLYNK_WRITE(V0) {
+  int buttonState = param.asInt();
+
+  // อ่าน sensor แบบ real-time ก่อน
+  waterValue = analogRead(waterPin);
+
+  // ถ้ามีน้ำ → Sensor ชนะ Manual
+  if (waterValue > WATER_THRESHOLD) {
+    Serial.println("ฝนตก → Servo หุบ (Manual ใช้ไม่ได้)");
+    myServo.write(SERVO_CLOSE_ANGLE);
+    servoState = SERVO_CLOSE_ANGLE;
+    Blynk.virtualWrite(V0, 1); // บังคับปุ่มกลับไปหุบ
+    return;
+  }
+
+  // ถ้าไม่มีน้ำ → Manual ชนะ (กดปุ๊บ Servo ทำปั๊บ)
+  if (buttonState == 1) {
+    myServo.write(SERVO_CLOSE_ANGLE);
+    servoState = SERVO_CLOSE_ANGLE;
+    Serial.println("Manual: กด ON → Servo หุบ");
+  } else {
+    myServo.write(SERVO_OPEN_ANGLE);
+    servoState = SERVO_OPEN_ANGLE;
+    Serial.println("Manual: กด OFF → Servo กาง");
+  }
+}
+
+// -------------------- Setup --------------------
 void setup() {
-  myServo.attach(servoPin);  // เชื่อมต่อ Servo กับขาที่กำหนด
-  myServo.write(0);          // เริ่มต้น Servo ที่มุม 0° = กางราวผ้า
-  Serial.begin(115200);      // เริ่ม Serial Monitor สำหรับแสดงค่าที่อ่านได้
+  Serial.begin(115200);
+  Blynk.begin(BLYNK_AUTH_TOKEN, WIFI_SSID, WIFI_PASSWORD);
+  
+  myServo.attach(servoPin);
+  myServo.write(SERVO_OPEN_ANGLE);   
+  servoState = SERVO_OPEN_ANGLE;
+
+  Blynk.syncVirtual(V0);             // sync ปุ่มตอนเริ่ม
+  checkWaterSensor();                // ตรวจทันทีตอนบูต
+  timer.setInterval(500L, checkWaterSensor); // ตรวจน้ำทุก 0.5s
 }
 
-// ฟังก์ชันหมุน Servo แบบนุ่มนวล
-void moveServoSmooth(int startAngle, int endAngle, int stepDelay = 15) {
-  if(startAngle < endAngle){           // ตรวจสอบว่ามุมเริ่มต้นน้อยกว่ามุมปลายทาง
-    for(int pos = startAngle; pos <= endAngle; pos++){  // หมุน Servo ทีละ 1° จาก start → end
-      myServo.write(pos);              // ส่งค่าให้ Servo หมุนไปตำแหน่งปัจจุบัน
-      delay(stepDelay);                // หน่วงเวลาเล็กน้อยเพื่อให้การหมุนเรียบ
-    }
-  } else {                             // กรณี startAngle > endAngle
-    for(int pos = startAngle; pos >= endAngle; pos--){ // หมุน Servo จาก start → end ลดทีละ 1°
-      myServo.write(pos);              // ส่งค่าให้ Servo หมุนไปตำแหน่งปัจจุบัน
-      delay(stepDelay);                // หน่วงเวลาเล็กน้อย
-    }
-  }
-}
-
+// -------------------- Loop --------------------
 void loop() {
-  int waterValue = analogRead(waterPin);  // อ่านค่าจาก Water Sensor (0-1023)
-  Serial.print("Water sensor value: ");   // แสดงข้อความก่อนค่าที่อ่านได้
-  Serial.println(waterValue);             // แสดงค่าที่อ่านจากเซ็นเซอร์
-
-  if (waterValue > threshold) {           // ถ้าค่าเซ็นเซอร์มากกว่า threshold → เจอน้ำ
-    Serial.println("Water detected! Folding clothesline.");  // แสดงข้อความว่าพับราว
-    moveServoSmooth(myServo.read(), 90);  // หมุน Servo ไป 90° แบบเรียบ → พับราว
-  } else {                                // ถ้าค่าเซ็นเซอร์น้อยกว่าหรือเท่ากับ threshold → ไม่มีน้ำ
-    Serial.println("No water. Clothesline open.");           // แสดงข้อความว่ากางราว
-    moveServoSmooth(myServo.read(), 0);   // หมุน Servo ไป 0° แบบเรียบ → กางราว
-  }
-
-  delay(500); // หน่วงเวลา 0.5 วินาที ก่อนอ่านค่าใหม่
+  Blynk.run();
+  timer.run();
 }
